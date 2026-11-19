@@ -9,8 +9,12 @@
     "resolveJsonModule": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "types": ["node"],
-    "plugins": [{ "name": "next" }],
+    "types": ["node", "vitest/globals"],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "paths": {
       "@/*": ["./src/*"]
     }
