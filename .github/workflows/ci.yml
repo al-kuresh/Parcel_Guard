@@ -23,6 +23,24 @@ jobs:
     timeout-minutes: 15
     env:
       NEXT_TELEMETRY_DISABLED: 1
+      # Same credentials as docker-compose.yml. This database exists only for this run.
+      DATABASE_URL: postgresql://parcelguard:parcelguard@localhost:5432/parcelguard
+
+    # A throwaway Postgres for this job, the same version as docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: parcelguard
+          POSTGRES_PASSWORD: parcelguard
+          POSTGRES_DB: parcelguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U parcelguard -d parcelguard"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     steps:
       - name: Check out the code
@@ -54,6 +72,21 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Apply database migrations
+        run: pnpm db:deploy
+
+      - name: Check every schema change has a migration
+        # Exit code 2 means schema.prisma differs from what the migrations built.
+        # Fix: run `pnpm db:migrate --name <what-changed>` and commit the new migration.
+        working-directory: apps/api
+        run: pnpm exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      - name: Seed the database
+        run: pnpm db:seed
+
+      - name: Database tests
+        run: pnpm test:db
 
       - name: Build
         run: pnpm build

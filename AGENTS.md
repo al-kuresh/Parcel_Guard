@@ -25,6 +25,7 @@ The owner of this repo is learning. Code is written in a separate Claude chat an
 ```
 apps/api         NestJS 12 API (port 4000, every route under /api)
 apps/web         Next.js 16 App Router (port 3000, proxies /api/* to the API)
+apps/api/prisma  schema.prisma, migrations/, seed.ts, data/bd-locations.json
 packages/shared  Zod schemas + types used by both apps; built to dist/
 docker-compose.yml  Postgres 18 + Redis 8 for local dev
 ```
@@ -34,8 +35,9 @@ docker-compose.yml  Postgres 18 + Redis 8 for local dev
 | Command | Does |
 |---|---|
 | `docker compose up -d` | Start Postgres and Redis |
-| `pnpm dev` | Build shared, then run shared (watch), api and web together |
+| `pnpm dev` | Codegen (build shared + generate Prisma client), then run shared (watch), api and web |
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` / `pnpm build` | What CI runs |
+| `pnpm db:migrate` / `pnpm db:seed` / `pnpm test:db` | Apply migrations / seed / run database tests (need Postgres) |
 | `pnpm format` | Format with Prettier |
 | `pnpm --filter @parcelguard/api <script>` | Run a script in one package |
 
@@ -44,6 +46,8 @@ docker-compose.yml  Postgres 18 + Redis 8 for local dev
 - **ESM everywhere.** Relative imports in `apps/api` and `packages/shared` end in `.js` (`import { X } from './x.js'`), even though the file is `x.ts`. `__dirname` doesn't exist; use `import.meta.dirname`.
 - **Tests use Vitest**, including the API (NestJS 12's default). Mocks are `vi.fn()`, not `jest.fn()`. Unit tests sit next to code as `*.spec.ts`; API end-to-end tests are `apps/api/test/*.e2e-spec.ts`.
 - **Validation rules live once**, as Zod schemas in `packages/shared`. Both apps import them from `@parcelguard/shared`. After changing shared, it must be rebuilt (`pnpm dev` does this automatically).
+- **Database lives in `apps/api/prisma/schema.prisma`** (Prisma 7). Tables and columns are snake_case in Postgres via `@map`/`@@map`. The generated client is in `apps/api/src/generated/` (git-ignored; `pnpm codegen` rebuilds it). Code gets the DB through `PrismaService` (injected) or `createPrismaClient()` (scripts, tests).
+- **Never edit a migration that is already on `main`.** Change `schema.prisma` and create a new migration. CI fails if the schema and migrations disagree.
 - **Money is integer paisa** (`pricePaisa: 125050` = ৳1,250.50). Never floats.
 - **Every database query on business data includes `shopId`.** This is how tenants stay separated.
 - **Never commit `.env`.** Only `.env.example` files, with no real secrets.

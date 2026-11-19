@@ -7,3 +7,4 @@ next-env.d.ts
 
 # Markdown is written by hand; Prettier would re-align every table.
 *.md
+apps/api/src/generated

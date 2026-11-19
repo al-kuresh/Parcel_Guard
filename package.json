@@ -9,12 +9,19 @@
     "node": ">=26"
   },
   "scripts": {
-    "dev": "pnpm build:shared && pnpm --recursive --parallel dev",
+    "dev": "pnpm codegen && pnpm --recursive --parallel dev",
     "build": "pnpm --recursive build",
     "build:shared": "pnpm --filter @parcelguard/shared build",
-    "lint": "pnpm build:shared && pnpm --recursive lint",
-    "typecheck": "pnpm build:shared && pnpm --recursive typecheck",
-    "test": "pnpm build:shared && pnpm --recursive test",
+    "codegen": "pnpm build:shared && pnpm --filter @parcelguard/api db:generate",
+    "lint": "pnpm codegen && pnpm --recursive lint",
+    "typecheck": "pnpm codegen && pnpm --recursive typecheck",
+    "test": "pnpm codegen && pnpm --recursive test",
+    "test:db": "pnpm codegen && pnpm --filter @parcelguard/api test:db",
+    "db:migrate": "pnpm --filter @parcelguard/api db:migrate",
+    "db:deploy": "pnpm --filter @parcelguard/api db:deploy",
+    "db:seed": "pnpm --filter @parcelguard/api db:seed",
+    "db:reset": "pnpm --filter @parcelguard/api db:reset",
+    "db:status": "pnpm --filter @parcelguard/api db:status",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
