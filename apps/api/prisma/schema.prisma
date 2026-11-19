@@ -1,0 +1,485 @@
+// ParcelGuard database schema. The design and the reasons behind it are in
+// docs/03-database-design.md; section numbers below point there.
+//
+// Naming: models are PascalCase in TypeScript (`prisma.order.findMany()`), but
+// tables and columns are snake_case in Postgres (`SELECT * FROM orders WHERE shop_id = ...`).
+// `@map` / `@@map` connect the two. Without them, tables would be called "Order" and
+// "User", which are SQL keywords and would need quotes in every query you write in DBeaver.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// The connection URL is not here: Prisma 7 reads it from prisma.config.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Role {
+  OWNER
+  MODERATOR
+}
+
+/// §3: the order lifecycle. Allowed moves between these are enforced in code (F5).
+enum OrderStatus {
+  DRAFT
+  CONFIRMED
+  BOOKED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+  CANCELLED
+}
+
+enum OrderSource {
+  MESSENGER
+  WHATSAPP
+  PHONE
+  WEBSITE
+  MANUAL
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum Courier {
+  MOCK
+  STEADFAST
+  PATHAO
+  REDX
+}
+
+/// Where a parcel is, from the courier's point of view.
+/// PENDING = booking job queued (F9), FAILED = the courier rejected the booking.
+enum ShipmentStatus {
+  PENDING
+  BOOKED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+  CANCELLED
+  FAILED
+}
+
+enum PayoutMatchStatus {
+  MATCHED
+  SHORT
+  OVER
+  UNKNOWN
+}
+
+/// UPAZILA = the 495 official upazilas (seeded in F1).
+/// METRO_THANA = city police areas such as Mirpur or Dhanmondi (added in F6).
+enum LocationKind {
+  UPAZILA
+  METRO_THANA
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Identity and tenancy
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  /// Stored lowercase by the app (F2), so "Demo@x.com" and "demo@x.com" can't both register.
+  email        String   @unique
+  /// argon2 hash (F2). Never the password itself.
+  passwordHash String   @map("password_hash")
+  name         String
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+  ordersCreated Order[]        @relation("OrderCreatedBy")
+  payoutUploads PayoutBatch[]
+  auditEntries  AuditLog[]
+
+  @@map("users")
+}
+
+/// The tenant. Every business table below has a shop_id pointing here.
+model Shop {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  name          String
+  slug          String   @unique
+  phone         String?
+  pickupAddress String?  @map("pickup_address")
+  /// Last order number used in this shop. F5 increments it in a transaction
+  /// to build codes like PG-000123 without two orders ever getting the same one.
+  orderSeq      Int      @default(0) @map("order_seq")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships    Membership[]
+  products       Product[]
+  customers      Customer[]
+  orders         Order[]
+  courierAccounts CourierAccount[]
+  payoutBatches  PayoutBatch[]
+  aiParseLogs    AiParseLog[]
+  auditLogs      AuditLog[]
+
+  @@map("shops")
+}
+
+/// Which users belong to which shops, and as what. Many-to-many between User and Shop.
+model Membership {
+  userId    String   @map("user_id") @db.Uuid
+  shopId    String   @map("shop_id") @db.Uuid
+  role      Role
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // A user is in a shop at most once. The pair is the primary key.
+  @@id([userId, shopId])
+  @@index([shopId])
+  @@map("memberships")
+}
+
+/// §4.5: we store a hash of each refresh token, and link each one to the token
+/// that replaced it, so reuse of an old token can be detected (F2).
+model RefreshToken {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  replacedById String?   @unique @map("replaced_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken? @relation("TokenRotation", fields: [replacedById], references: [id])
+  replaces   RefreshToken? @relation("TokenRotation")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Catalogue and customers
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Product {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  shopId     String   @map("shop_id") @db.Uuid
+  sku        String
+  name       String
+  /// §4.1: money is whole paisa. ৳1,250.50 is stored as 125050.
+  pricePaisa Int      @map("price_paisa")
+  stock      Int      @default(0)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  shop       Shop        @relation(fields: [shopId], references: [id])
+  orderItems OrderItem[]
+
+  @@unique([shopId, sku])
+  @@map("products")
+}
+
+model Customer {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  shopId    String   @map("shop_id") @db.Uuid
+  name      String
+  /// Normalised to +8801XXXXXXXXX (F4). Customers are identified by phone.
+  phone     String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  shop   Shop    @relation(fields: [shopId], references: [id])
+  orders Order[]
+
+  // One customer per phone number per shop. Also the index for find-by-phone (§5).
+  @@unique([shopId, phone])
+  // Lets orders reference (id, shop_id) together; see Order.customer below.
+  @@unique([id, shopId])
+  @@map("customers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bangladesh locations (seeded once, read-only)
+// Ids come from the source dataset so they stay stable between seeds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Division {
+  id      Int    @id
+  name    String @unique
+  bnName  String @map("bn_name")
+  bbsCode String @unique @map("bbs_code")
+
+  districts District[]
+
+  @@map("divisions")
+}
+
+model District {
+  id         Int    @id
+  divisionId Int    @map("division_id")
+  name       String @unique
+  bnName     String @map("bn_name")
+  bbsCode    String @unique @map("bbs_code")
+
+  division Division  @relation(fields: [divisionId], references: [id])
+  upazilas Upazila[]
+  orders   Order[]
+
+  @@index([divisionId])
+  @@map("districts")
+}
+
+/// Upazilas, and from F6 also metro thanas (see `kind`).
+model Upazila {
+  id         Int          @id
+  districtId Int          @map("district_id")
+  name       String
+  bnName     String       @map("bn_name")
+  kind       LocationKind @default(UPAZILA)
+  /// Official BBS code. Null for metro thanas, which BBS doesn't code the same way.
+  bbsCode    String?      @unique @map("bbs_code")
+
+  district District @relation(fields: [districtId], references: [id])
+  orders   Order[]
+
+  // Upazila names repeat across the country (there's a Mirpur in Kushtia too),
+  // but never twice inside one district.
+  @@unique([districtId, name])
+  @@map("upazilas")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Orders
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Order {
+  id                  String      @id @default(uuid(7)) @db.Uuid
+  shopId              String      @map("shop_id") @db.Uuid
+  /// Human-friendly code like PG-000123, unique inside one shop.
+  code                String
+  customerId          String      @map("customer_id") @db.Uuid
+  status              OrderStatus @default(DRAFT)
+  source              OrderSource @default(MANUAL)
+  /// The pasted Messenger/WhatsApp text, kept for the AI log and for debugging (F7).
+  rawMessage          String?     @map("raw_message")
+  addressLine         String      @map("address_line")
+  districtId          Int?        @map("district_id")
+  upazilaId           Int?        @map("upazila_id")
+  /// 0–100, from the address normaliser (F6).
+  addressQuality      Int?        @map("address_quality")
+  subtotalPaisa       Int         @map("subtotal_paisa")
+  deliveryChargePaisa Int         @map("delivery_charge_paisa")
+  /// What the courier collects from the customer at the door.
+  codAmountPaisa      Int         @map("cod_amount_paisa")
+  /// 0–100 return-risk score with readable reasons (F8).
+  riskScore           Int?        @map("risk_score")
+  riskLevel           RiskLevel?  @map("risk_level")
+  riskReasons         Json?       @map("risk_reasons")
+  note                String?
+  createdById         String      @map("created_by_id") @db.Uuid
+  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  shop      Shop      @relation(fields: [shopId], references: [id])
+  /// Tenant safety in the database itself: the foreign key is (customer_id, shop_id),
+  /// so an order in Shop A can never point at a customer of Shop B, even if the
+  /// app code has a bug.
+  customer  Customer  @relation(fields: [customerId, shopId], references: [id, shopId])
+  district  District? @relation(fields: [districtId], references: [id])
+  upazila   Upazila?  @relation(fields: [upazilaId], references: [id])
+  createdBy User      @relation("OrderCreatedBy", fields: [createdById], references: [id])
+
+  items       OrderItem[]
+  shipment    Shipment?
+  aiParseLogs AiParseLog[]
+
+  @@unique([shopId, code])
+  // §5: the main orders list, filtered by status, newest first.
+  @@index([shopId, status, createdAt(sort: Desc)])
+  // §5: a customer's past orders, for the risk score.
+  @@index([shopId, customerId])
+  @@map("orders")
+}
+
+/// §4.3: name and price are copied at order time, so editing a product later
+/// never changes an old order.
+model OrderItem {
+  id             String  @id @default(uuid(7)) @db.Uuid
+  orderId        String  @map("order_id") @db.Uuid
+  /// Null if the item was typed in freely, or the product was deleted later.
+  productId      String? @map("product_id") @db.Uuid
+  nameSnapshot   String  @map("name_snapshot")
+  unitPricePaisa Int     @map("unit_price_paisa")
+  quantity       Int
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Couriers and money
+// ─────────────────────────────────────────────────────────────────────────────
+
+model CourierAccount {
+  id                   String   @id @default(uuid(7)) @db.Uuid
+  shopId               String   @map("shop_id") @db.Uuid
+  courier              Courier
+  /// API keys encrypted with AES-256-GCM (F9). Null for the Mock courier.
+  credentialsEncrypted String?  @map("credentials_encrypted")
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  shop Shop @relation(fields: [shopId], references: [id])
+
+  // One account per courier per shop.
+  @@unique([shopId, courier])
+  @@map("courier_accounts")
+}
+
+model Shipment {
+  id               String         @id @default(uuid(7)) @db.Uuid
+  /// Unique: one order has at most one shipment.
+  orderId          String         @unique @map("order_id") @db.Uuid
+  courier          Courier
+  /// The courier's own id for the parcel. Null until the booking succeeds.
+  consignmentId    String?        @map("consignment_id")
+  trackingCode     String?        @map("tracking_code")
+  status           ShipmentStatus @default(PENDING)
+  chargePaisa      Int?           @map("charge_paisa")
+  codExpectedPaisa Int            @map("cod_expected_paisa")
+  bookedAt         DateTime?      @map("booked_at") @db.Timestamptz(3)
+  lastEventAt      DateTime?      @map("last_event_at") @db.Timestamptz(3)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order       Order           @relation(fields: [orderId], references: [id])
+  events      ShipmentEvent[]
+  payoutLines PayoutLine[]
+
+  // §5: webhooks and payout CSVs find a shipment by the courier's consignment id.
+  // Unique per courier, because two couriers could reuse the same id format.
+  @@unique([courier, consignmentId])
+  @@index([consignmentId])
+  @@map("shipments")
+}
+
+/// §4.6: append-only status history of a shipment.
+model ShipmentEvent {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  shipmentId      String         @map("shipment_id") @db.Uuid
+  status          ShipmentStatus
+  /// The courier's id for this event. With the unique below, a webhook
+  /// delivered twice is stored once (idempotency, F9).
+  providerEventId String         @map("provider_event_id")
+  rawPayload      Json           @map("raw_payload")
+  occurredAt      DateTime       @map("occurred_at") @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@unique([shipmentId, providerEventId])
+  @@map("shipment_events")
+}
+
+/// One uploaded payout CSV from a courier (F10).
+model PayoutBatch {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  shopId         String   @map("shop_id") @db.Uuid
+  courier        Courier
+  fileName       String   @map("file_name")
+  uploadedById   String   @map("uploaded_by_id") @db.Uuid
+  totalPaidPaisa Int      @map("total_paid_paisa")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shop       Shop         @relation(fields: [shopId], references: [id])
+  uploadedBy User         @relation(fields: [uploadedById], references: [id])
+  lines      PayoutLine[]
+
+  @@index([shopId, createdAt(sort: Desc)])
+  @@map("payout_batches")
+}
+
+model PayoutLine {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  batchId         String            @map("batch_id") @db.Uuid
+  consignmentId   String            @map("consignment_id")
+  amountPaidPaisa Int               @map("amount_paid_paisa")
+  /// Null when no shipment matches (status UNKNOWN).
+  shipmentId      String?           @map("shipment_id") @db.Uuid
+  matchStatus     PayoutMatchStatus @map("match_status")
+  /// amount paid minus amount expected. Negative = short-paid.
+  differencePaisa Int               @default(0) @map("difference_paisa")
+
+  batch    PayoutBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  shipment Shipment?   @relation(fields: [shipmentId], references: [id])
+
+  @@index([batchId])
+  @@index([shipmentId])
+  @@map("payout_lines")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Logs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Every LLM call (F7): what went in, what came out, and what it cost.
+model AiParseLog {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  shopId       String   @map("shop_id") @db.Uuid
+  orderId      String?  @map("order_id") @db.Uuid
+  provider     String
+  model        String
+  input        String
+  output       Json?
+  /// Did the output pass the shared Zod schema?
+  valid        Boolean
+  inputTokens  Int?     @map("input_tokens")
+  outputTokens Int?     @map("output_tokens")
+  latencyMs    Int      @map("latency_ms")
+  /// Cost in millionths of a US dollar, so it can be an integer too.
+  costMicroUsd Int?     @map("cost_micro_usd")
+  error        String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shop  Shop   @relation(fields: [shopId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, createdAt(sort: Desc)])
+  @@map("ai_parse_logs")
+}
+
+/// §4.6: append-only record of who changed what (F11).
+model AuditLog {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  shopId    String   @map("shop_id") @db.Uuid
+  /// Null for system actions, such as a courier webhook.
+  actorId   String?  @map("actor_id") @db.Uuid
+  action    String
+  entity    String
+  entityId  String   @map("entity_id")
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shop  Shop  @relation(fields: [shopId], references: [id])
+  actor User? @relation(fields: [actorId], references: [id])
+
+  // §5: the activity feed, newest first.
+  @@index([shopId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}

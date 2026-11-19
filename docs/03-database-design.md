@@ -122,3 +122,19 @@ Any move not drawn here is **rejected by the API** (for example, `DELIVERED → 
 | `AuditLog (shopId, createdAt DESC)` | Activity feed |
 
 We'll check them with `EXPLAIN ANALYZE` once seed data exists. That's a good thing to show in an interview.
+
+## 6. How F1 implemented this (decisions made while building)
+
+The schema is `apps/api/prisma/schema.prisma`. Where it goes beyond the tables above:
+
+| Decision | Why |
+|---|---|
+| Tables and columns are **snake_case** in Postgres (`orders.shop_id`), camelCase in TypeScript | `Order` and `User` are SQL keywords; snake_case means no quoting in DBeaver |
+| Ids are **UUID v7** | Unguessable like any UUID, but time-ordered, so new rows land at the end of the index |
+| **`orders (customer_id, shop_id)` → `customers (id, shop_id)`** composite foreign key | Postgres itself refuses an order in Shop A that points at Shop B's customer |
+| `Shop.orderSeq` | Counter for per-shop order codes (`PG-000123`), incremented in a transaction in F5 |
+| `ShipmentStatus` enum: `PENDING, BOOKED, IN_TRANSIT, DELIVERED, RETURNED, CANCELLED, FAILED` | The courier's view of a parcel, separate from the order's status |
+| `Shipment` unique on (`courier`, `consignmentId`), plus a plain index on `consignmentId` | Two couriers may use the same id format |
+| `Upazila.kind` (`UPAZILA` \| `METRO_THANA`) and nullable `bbsCode` | F1 seeds the 495 official upazilas; F6 adds city thanas like Mirpur and Dhanmondi |
+| **CHECK constraints** (second migration, written by hand): money ≥ 0, quantity > 0, stock ≥ 0, scores 0–100 | Prisma's schema language can't express them, and §4.4 wants the database to do the hard work |
+| Membership's primary key is (`userId`, `shopId`) | The pair is unique anyway, so it needs no separate id |
