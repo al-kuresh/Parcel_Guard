@@ -1,0 +1,25 @@
+{
+  "name": "parcelguard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Stop losing money on returned cash-on-delivery parcels.",
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "pnpm build:shared && pnpm --recursive --parallel dev",
+    "build": "pnpm --recursive build",
+    "build:shared": "pnpm --filter @parcelguard/shared build",
+    "lint": "pnpm build:shared && pnpm --recursive lint",
+    "typecheck": "pnpm build:shared && pnpm --recursive typecheck",
+    "test": "pnpm build:shared && pnpm --recursive test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "3.10.1",
+    "typescript": "6.0.3"
+  }
+}

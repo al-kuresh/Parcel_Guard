@@ -4,7 +4,36 @@
 
 Paste a messy Messenger order ("apu 2ta black L size, mirpur 10 er pase, 017XXXXXXXX") and ParcelGuard turns it into a clean order, checks the address against the official district/upazila list, scores how likely the parcel is to come back, books the courier in the background, and checks the courier's payout CSV against what you should have been paid.
 
-> **Status:** design finished, code starts with F0. See the [build plan](docs/04-build-plan.md).
+> **Status:** F0 (monorepo scaffold) in progress. See the [build plan](docs/04-build-plan.md).
+
+## Quick start
+
+You need Node 26+, pnpm 12, and Docker with Compose.
+
+```bash
+pnpm install                 # install every package in the monorepo
+cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.example apps/web/.env
+docker compose up -d         # start Postgres and Redis in the background
+pnpm dev                     # run the API (:4000) and the web app (:3000) together
+```
+
+Open http://localhost:3000. A green **API is up** card means the web app reached the API through its `/api` proxy.
+
+| Command | What it does |
+|---|---|
+| `pnpm lint` · `pnpm typecheck` · `pnpm test` · `pnpm build` | The same checks CI runs on every pull request |
+| `pnpm format` | Format all code with Prettier |
+| `docker compose down` | Stop Postgres and Redis (data is kept) |
+
+## Repository layout
+
+```
+apps/api         NestJS API: business logic, database, queues, webhooks
+apps/web         Next.js app: the screens sellers use
+packages/shared  Zod schemas and types shared by both apps
+docs/            Design docs and my learning notes
+```
 
 ## Tech stack
 

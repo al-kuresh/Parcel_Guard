@@ -1,0 +1,59 @@
+# Runs on every pull request (so every push to a feat/... branch with an open PR)
+# and on every push to main. A red X on the PR means: don't merge yet.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The job only reads the code; it can't push or change settings.
+permissions:
+  contents: read
+
+# If you push twice quickly, cancel the older run instead of running both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+
+      - name: Install pnpm (version comes from "packageManager" in package.json)
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node (version comes from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies exactly as locked
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Check docker-compose.yml is valid
+        run: docker compose config --quiet
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

@@ -51,8 +51,8 @@ A **monorepo** = several apps in one Git repo. We use **pnpm workspaces** so `ap
 | Queue | **BullMQ + Redis** | Retries with backoff, delayed jobs, a dashboard; courier APIs are slow and flaky |
 | Auth | **Own JWT access + rotating refresh tokens** (httpOnly cookies, argon2 hashes) | We build it ourselves so you can explain every part of it in an interview |
 | AI | **Provider interface** + JSON-schema structured output | Swap Gemini/OpenAI/Claude by changing one env var; never trust raw model text |
-| Tests | **Jest + Supertest** (API), **Vitest** (shared), **Playwright** smoke test (web) | Unit + API + one real browser path |
-| CI | **GitHub Actions** with a Postgres service container | Every push runs lint, type-check and tests |
+| Tests | **Vitest + Supertest** (API), **Vitest** (shared), **Playwright** smoke test (web) | Unit + API + one real browser path. NestJS 12 ships with Vitest by default, so one test runner covers the whole repo (changed from Jest in F0) |
+| CI | **GitHub Actions** (a Postgres service container is added in F1, when tests first need a database) | Every push runs lint, type-check and tests |
 
 ## 4. Rules every request follows
 

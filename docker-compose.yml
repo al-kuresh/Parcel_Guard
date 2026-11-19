@@ -1,0 +1,39 @@
+# Local development services. Start: `docker compose up -d`  Stop: `docker compose down`
+# The apps themselves run on your machine with `pnpm dev`; only the databases run in Docker.
+name: parcelguard
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: parcelguard
+      POSTGRES_PASSWORD: parcelguard # local only; production uses Neon's own credentials
+      POSTGRES_DB: parcelguard
+    ports:
+      - '127.0.0.1:5432:5432' # 127.0.0.1 = reachable from this laptop only, not from your Wi-Fi network
+    volumes:
+      - postgres-data:/var/lib/postgresql # Postgres 18 keeps its data under this folder
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U parcelguard -d parcelguard']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    command: ['redis-server', '--appendonly', 'yes'] # write every change to disk so queued jobs survive a restart
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# Named volumes keep your data when containers are removed.
+# `docker compose down -v` deletes them too (a full reset).
+volumes:
+  postgres-data:
+  redis-data:
