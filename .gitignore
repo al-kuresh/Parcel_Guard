@@ -34,3 +34,6 @@ pnpm-debug.log*
 # Local tooling
 .turbo/
 .vercel/
+
+# Prisma client, generated from apps/api/prisma/schema.prisma by `pnpm codegen`
+apps/api/src/generated/
